@@ -1,0 +1,484 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mémo Réunions</title>
+<style>
+:root{--fond:#f6f7f9;--carte:#fff;--texte:#1d2330;--doux:#5d6677;--bord:#dde1e8;
+  --accent:#1f5fbf;--sur-accent:#fff;--retard:#b3261e;--proche:#a15c00;--alerte:#fff4e5}
+@media (prefers-color-scheme:dark){:root{--fond:#14171c;--carte:#1d2129;--texte:#e6e9ef;
+  --doux:#9aa3b2;--bord:#2e3440;--accent:#7fb0ff;--sur-accent:#10151c;--retard:#ff8a80;
+  --proche:#ffb74d;--alerte:#3a2e1c}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--fond);color:var(--texte);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+header{background:var(--carte);border-bottom:1px solid var(--bord);padding:10px 16px;display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+header .logo{font-weight:700;color:var(--texte);text-decoration:none}
+header form{margin-left:auto;display:flex;gap:6px}
+header input{width:200px}
+main{max-width:1000px;margin:0 auto;padding:16px}
+a{color:var(--accent)}
+h1{font-size:1.5rem;margin:.2em 0 .6em}
+h2{font-size:1.1rem;margin:1.4em 0 .5em}
+.carte{background:var(--carte);border:1px solid var(--bord);border-radius:8px;padding:12px 16px;margin-bottom:12px}
+.carte h2:first-child{margin-top:0}
+.grille{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px}
+.doux{color:var(--doux);font-size:.9em}
+.retard{color:var(--retard);font-weight:600}
+.proche{color:var(--proche);font-weight:600}
+.faite{text-decoration:line-through;color:var(--doux)}
+ul.liste{list-style:none;padding:0;margin:0}
+ul.liste li{padding:6px 0;border-bottom:1px solid var(--bord)}
+ul.liste li:last-child{border-bottom:0}
+.texte{white-space:pre-wrap}
+label{display:block;font-weight:600;margin-top:12px}
+input,textarea{width:100%;padding:8px;border:1px solid var(--bord);border-radius:6px;background:var(--carte);color:var(--texte);font:inherit}
+textarea{min-height:110px}
+.ligne{display:flex;gap:12px;flex-wrap:wrap}
+.ligne>div{flex:1;min-width:180px}
+button,.bouton{display:inline-block;padding:7px 14px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:var(--sur-accent);font:inherit;cursor:pointer;text-decoration:none}
+.secondaire{background:transparent;color:var(--accent)}
+.danger{border-color:var(--retard);background:transparent;color:var(--retard)}
+button.mini{padding:0 6px;font-size:.85em}
+.barre{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
+.erreur{background:#fdecea;color:#8a1c14;padding:8px 12px;border-radius:6px}
+.bandeau{background:var(--alerte);border:1px solid var(--proche);border-radius:8px;padding:8px 12px;margin-bottom:12px}
+code{font-size:.9em}
+@media (max-width:600px){header form{margin-left:0;width:100%}header input{flex:1;width:auto}}
+</style>
+</head>
+<body>
+<header>
+  <a class="logo" href="#/">📋 Mémo Réunions</a>
+  <a href="#/nouvelle">+ Nouvelle réunion</a>
+  <a href="#/actions">Actions</a>
+  <a href="#/sauvegarde">Sauvegarde</a>
+  <form id="form-recherche"><input id="q" placeholder="Rechercher…" aria-label="Rechercher"><button>OK</button></form>
+</header>
+<main id="app"></main>
+
+<script>
+"use strict";
+/* ------------------------------------------------------------------
+   Données : conservées dans le navigateur (localStorage).
+   Pensez à exporter régulièrement (page « Sauvegarde »).
+------------------------------------------------------------------ */
+const CLE = "memo-reunions";
+let donnees = { version: 1, reunions: [], derniereSauvegarde: null };
+let stockageOk = true;
+
+function charger() {
+  try {
+    const brut = localStorage.getItem(CLE);
+    if (brut) donnees = Object.assign(donnees, JSON.parse(brut));
+  } catch (err) { stockageOk = false; }
+}
+function enregistrer() {
+  try { localStorage.setItem(CLE, JSON.stringify(donnees)); }
+  catch (err) { stockageOk = false; alert("Impossible d'enregistrer dans le navigateur. Exportez vos données !"); }
+}
+const nouvelId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+
+/* ------------------------------------------------------------------ Utilitaires */
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const iso = d => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+const aujourdhui = () => iso(new Date());
+const plusJours = (jour, n) => { const d = new Date(jour + "T12:00:00"); d.setDate(d.getDate() + n); return iso(d); };
+const frDate = jour => jour ? jour.split("-").reverse().join("/") : "";
+
+function parseDate(v) {
+  v = (v || "").trim();
+  if (!v) return null;
+  let m = v.match(/^(\d{4})-(\d{2})-(\d{2})$/) || v.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!m) throw new Error(`Date invalide : « ${v} » (format AAAA-MM-JJ ou JJ/MM/AAAA)`);
+  const [a, mo, j] = m[1].length === 4 ? [m[1], m[2], m[3]] : [m[3], m[2], m[1]];
+  const d = new Date(`${a}-${mo}-${j}T12:00:00`);
+  if (isNaN(d) || iso(d) !== `${a}-${mo}-${j}`) throw new Error(`Date invalide : « ${v} »`);
+  return `${a}-${mo}-${j}`;
+}
+
+/* Une action par ligne : « [x] Texte @responsable !2026-10-15 » */
+function parseActions(texte, anciennes = []) {
+  const res = [];
+  for (const ligne of (texte || "").split(/\r?\n/)) {
+    const m = ligne.match(/^\s*(?:[-*]\s*)?(?:\[([ xX])\]\s*)?(.*?)\s*$/);
+    let corps = m[2];
+    if (!corps) continue;
+    let echeance = null, responsable = "";
+    const dm = corps.match(/(?:^|\s)!(\d{4}-\d{2}-\d{2}|\d{2}\/\d{2}\/\d{4})(?=\s|$)/);
+    if (dm) { echeance = parseDate(dm[1]); corps = corps.replace(dm[0], " "); }
+    const rm = corps.match(/(?:^|\s)@([\p{L}\p{N}_.'-]+)/u);
+    if (rm) { responsable = rm[1]; corps = corps.replace(rm[0], " "); }
+    const t = corps.split(/\s+/).filter(Boolean).join(" ");
+    if (!t) continue;
+    const ancienne = anciennes.find(a => a.texte === t);
+    res.push({ id: ancienne ? ancienne.id : nouvelId(), texte: t, responsable, echeance,
+               faite: (m[1] || " ").toLowerCase() === "x" });
+  }
+  return res;
+}
+const formatActions = actions => actions.map(a =>
+  `- [${a.faite ? "x" : " "}] ${a.texte}${a.responsable ? " @" + a.responsable : ""}${a.echeance ? " !" + a.echeance : ""}`
+).join("\n");
+
+/* ------------------------------------------------------------------ Requêtes */
+const trierDesc = l => [...l].sort((a, b) => b.date.localeCompare(a.date));
+const reunion = id => donnees.reunions.find(r => r.id === id);
+
+function toutesActions() {
+  const l = [];
+  for (const r of donnees.reunions) for (const a of r.actions) l.push({ ...a, reunion: r });
+  return l;
+}
+function actionsOuvertes(filtre = {}) {
+  return toutesActions()
+    .filter(a => !a.faite)
+    .filter(a => !filtre.responsable || a.responsable.toLowerCase() === filtre.responsable.toLowerCase())
+    .filter(a => !filtre.projet || a.reunion.projet === filtre.projet)
+    .sort((a, b) => (a.echeance || "9999").localeCompare(b.echeance || "9999") || a.reunion.date.localeCompare(b.reunion.date));
+}
+function projets() {
+  const p = {};
+  for (const r of donnees.reunions) {
+    const x = p[r.projet] ||= { nom: r.projet, nb: 0, derniere: "", ouvertes: 0 };
+    x.nb++; if (r.date > x.derniere) x.derniere = r.date;
+    x.ouvertes += r.actions.filter(a => !a.faite).length;
+  }
+  return Object.values(p).sort((a, b) => b.derniere.localeCompare(a.derniere));
+}
+const prochainesReunions = (depuis, jusqua) => donnees.reunions
+  .filter(r => r.prochaine && r.prochaine >= depuis && (!jusqua || r.prochaine <= jusqua))
+  .sort((a, b) => a.prochaine.localeCompare(b.prochaine));
+
+function rechercher(q) {
+  const norm = s => s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const termes = norm(q).split(/\s+/).filter(Boolean);
+  if (!termes.length) return [];
+  return trierDesc(donnees.reunions.filter(r => {
+    const t = norm([r.projet, r.titre, r.participants, r.notes, r.decisions,
+      ...r.actions.map(a => a.texte + " " + a.responsable)].join(" "));
+    return termes.every(x => t.includes(x));
+  }));
+}
+
+/* ------------------------------------------------------------------ Exports */
+function telecharger(nom, contenu, type) {
+  const url = URL.createObjectURL(new Blob([contenu], { type }));
+  const a = Object.assign(document.createElement("a"), { href: url, download: nom });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function reunionMarkdown(r) {
+  const l = [`## ${r.date} — ${r.titre}`, "", `**Projet :** ${r.projet}  `];
+  if (r.participants) l.push(`**Participants :** ${r.participants}  `);
+  if (r.prochaine) l.push(`**Prochaine réunion :** ${r.prochaine}  `);
+  if (r.notes) l.push("", "### Notes", "", r.notes);
+  if (r.decisions) l.push("", "### Décisions", "", r.decisions);
+  if (r.actions.length) l.push("", "### Actions", "", formatActions(r.actions));
+  return l.join("\n") + "\n";
+}
+
+function calendrierIcs() {
+  const echap = s => s.replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\r?\n/g, "\\n");
+  const plier = ligne => {   // RFC 5545 : 75 octets max par ligne
+    const enc = new TextEncoder(); const morceaux = []; let courant = "", taille = 0;
+    for (const c of ligne) {
+      const n = enc.encode(c).length;
+      if (taille + n > (morceaux.length ? 74 : 75)) { morceaux.push(courant); courant = ""; taille = 0; }
+      courant += c; taille += n;
+    }
+    morceaux.push(courant); return morceaux.join("\r\n ");
+  };
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").slice(0, 15) + "Z";
+  const l = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Memo Reunions//FR", "CALSCALE:GREGORIAN"];
+  const evt = (uid, jour, resume, description) => l.push(
+    "BEGIN:VEVENT", `UID:${uid}@memo-reunions`, `DTSTAMP:${stamp}`,
+    `DTSTART;VALUE=DATE:${jour.replace(/-/g, "")}`, `DTEND;VALUE=DATE:${plusJours(jour, 1).replace(/-/g, "")}`,
+    `SUMMARY:${echap(resume)}`, `DESCRIPTION:${echap(description)}`,
+    "BEGIN:VALARM", "ACTION:DISPLAY", `DESCRIPTION:${echap(resume)}`, "TRIGGER:-PT15H", "END:VALARM",
+    "END:VEVENT");
+  for (const a of actionsOuvertes()) if (a.echeance)
+    evt("action-" + a.id, a.echeance, `[${a.reunion.projet}] Action : ${a.texte}${a.responsable ? " (" + a.responsable + ")" : ""}`,
+        `Décidée lors de « ${a.reunion.titre} » du ${frDate(a.reunion.date)}.`);
+  for (const r of prochainesReunions(aujourdhui()))
+    evt("suivi-" + r.id, r.prochaine, `[${r.projet}] Réunion de suivi : ${r.titre}`,
+        "Relire le compte rendu précédent avant la réunion.");
+  l.push("END:VCALENDAR");
+  return l.map(plier).join("\r\n") + "\r\n";
+}
+
+/* ------------------------------------------------------------------ Rendu HTML */
+function classeEcheance(jour) {
+  if (!jour) return "";
+  if (jour < aujourdhui()) return "retard";
+  if (jour <= plusJours(aujourdhui(), 7)) return "proche";
+  return "";
+}
+function htmlAction(a, contexte = true) {
+  const details = [];
+  if (a.responsable) details.push(`👤 ${esc(a.responsable)}`);
+  if (a.echeance) details.push(`<span class="${a.faite ? "" : classeEcheance(a.echeance)}">📅 ${frDate(a.echeance)}</span>`);
+  if (contexte) details.push(`<a href="#/reunion/${a.reunion.id}">${esc(a.reunion.projet)} · ${esc(a.reunion.titre)}</a>`);
+  return `<li><span class="${a.faite ? "faite" : ""}">${esc(a.texte)}</span>
+    <button class="mini secondaire" data-basculer="${a.reunion.id}|${a.id}">${a.faite ? "Rouvrir" : "Fait ✓"}</button>
+    <div class="doux">${details.join(" · ")}</div></li>`;
+}
+const listeActions = (l, vide, contexte = true) =>
+  l.length ? `<ul class="liste">${l.map(a => htmlAction(a, contexte)).join("")}</ul>` : `<p class="doux">${vide}</p>`;
+const listeReunions = (l, vide = "Aucune réunion.") => l.length
+  ? `<ul class="liste">${l.map(r => `<li><a href="#/reunion/${r.id}">${esc(r.titre)}</a>
+      <span class="doux">— ${frDate(r.date)} · <a href="#/projet/${encodeURIComponent(r.projet)}">${esc(r.projet)}</a></span></li>`).join("")}</ul>`
+  : `<p class="doux">${vide}</p>`;
+const bloc = (titre, contenu) => `<div class="carte"><h2>${titre}</h2>${contenu}</div>`;
+
+function bandeauSauvegarde() {
+  if (!stockageOk) return `<div class="bandeau">⚠️ Ce navigateur ne permet pas d'enregistrer les données localement.
+    Exportez-les avant de fermer la page (<a href="#/sauvegarde">Sauvegarde</a>).</div>`;
+  if (!donnees.reunions.length) return "";
+  const d = donnees.derniereSauvegarde;
+  if (d && d >= plusJours(aujourdhui(), -7)) return "";
+  return `<div class="bandeau">💾 ${d ? `Dernière sauvegarde le ${frDate(d)}.` : "Aucune sauvegarde exportée pour l'instant."}
+    Vos données ne sont que dans ce navigateur : <a href="#/sauvegarde">exportez-les</a> régulièrement.</div>`;
+}
+
+const vues = {
+  accueil() {
+    const auj = aujourdhui(), horizon = plusJours(auj, 14), ouvertes = actionsOuvertes();
+    const retard = ouvertes.filter(a => a.echeance && a.echeance < auj);
+    const bientot = ouvertes.filter(a => a.echeance && a.echeance >= auj && a.echeance <= horizon);
+    const suivis = prochainesReunions(auj, horizon);
+    const lp = projets();
+    return `${bandeauSauvegarde()}<h1>Tableau de bord</h1><div class="grille">
+      ${bloc("⚠️ Actions en retard", listeActions(retard, "Rien en retard 👍"))}
+      ${bloc("⏳ Échéances sous 14 jours", listeActions(bientot, "Aucune échéance proche."))}
+      ${bloc("🗓️ Réunions de suivi à venir", suivis.length ? `<ul class="liste">${suivis.map(r =>
+          `<li><span class="${classeEcheance(r.prochaine)}">📅 ${frDate(r.prochaine)}</span>
+           <a href="#/reunion/${r.id}">${esc(r.projet)} · suite de « ${esc(r.titre)} »</a></li>`).join("")}</ul>`
+          : `<p class="doux">Aucune réunion de suivi prévue.</p>`)}
+      ${bloc("🕘 Dernières réunions", listeReunions(trierDesc(donnees.reunions).slice(0, 8)))}
+      </div>
+      ${bloc("📁 Projets", lp.length ? `<ul class="liste">${lp.map(p =>
+          `<li><a href="#/projet/${encodeURIComponent(p.nom)}">${esc(p.nom)}</a>
+           <span class="doux">— ${p.nb} réunion(s), dernière le ${frDate(p.derniere)}, ${p.ouvertes} action(s) ouverte(s)</span></li>`).join("")}</ul>`
+          : `<p class="doux">Aucun projet pour l'instant. <a href="#/nouvelle">Saisissez votre première réunion</a>.</p>`)}`;
+  },
+
+  projet(nom) {
+    const liste = trierDesc(donnees.reunions.filter(r => r.projet === nom));
+    if (!liste.length) return null;
+    return `<h1>Projet ${esc(nom)}</h1>
+      <div class="barre"><a class="bouton" href="#/nouvelle?projet=${encodeURIComponent(nom)}">+ Réunion sur ce projet</a>
+      <button class="secondaire" data-md-projet="${esc(nom)}">Exporter en Markdown</button></div>
+      ${bloc("Actions ouvertes", listeActions(actionsOuvertes({ projet: nom }), "Aucune action ouverte.", false))}
+      <h2>Historique des réunions</h2>
+      ${liste.map(r => `<div class="carte"><a href="#/reunion/${r.id}"><strong>${frDate(r.date)} — ${esc(r.titre)}</strong></a>
+        <div class="doux">${esc(r.participants)}</div>
+        ${r.decisions ? `<div class="texte doux">Décisions : ${esc(r.decisions.slice(0, 400))}</div>` : ""}</div>`).join("")}`;
+  },
+
+  reunion(id) {
+    const r = reunion(id);
+    if (!r) return null;
+    const meta = [`📅 ${frDate(r.date)}`, `📁 <a href="#/projet/${encodeURIComponent(r.projet)}">${esc(r.projet)}</a>`];
+    if (r.participants) meta.push(`👥 ${esc(r.participants)}`);
+    if (r.prochaine) meta.push(`🔁 Prochaine réunion : <strong>${frDate(r.prochaine)}</strong>`);
+    return `<h1>${esc(r.titre)}</h1><div class="doux">${meta.join(" · ")}</div>
+      <div class="barre"><a class="bouton" href="#/modifier/${r.id}">Modifier</a>
+        <a class="bouton secondaire" href="#/nouvelle?suite=${r.id}">Réunion de suivi</a>
+        <button class="secondaire" data-md-reunion="${r.id}">Markdown</button>
+        <button class="danger" data-supprimer="${r.id}">Supprimer</button></div>
+      ${r.notes ? bloc("Notes", `<div class="texte">${esc(r.notes)}</div>`) : ""}
+      ${r.decisions ? bloc("Décisions", `<div class="texte">${esc(r.decisions)}</div>`) : ""}
+      ${r.actions.length ? bloc("Actions", listeActions(r.actions.map(a => ({ ...a, reunion: r })), "", false)) : ""}`;
+  },
+
+  formulaire(valeurs, idModif, erreur) {
+    const v = k => esc(valeurs[k] || "");
+    const noms = [...new Set(donnees.reunions.map(r => r.projet))].sort();
+    return `<h1>${idModif ? "Modifier la réunion" : "Nouvelle réunion"}</h1>
+      ${erreur ? `<p class="erreur">${esc(erreur)}</p>` : ""}
+      <form id="form-reunion" class="carte" data-id="${idModif || ""}">
+        <div class="ligne"><div><label for="projet">Projet *</label>
+          <input id="projet" name="projet" list="liste-projets" required value="${v("projet")}" placeholder="ex. Migration AD">
+          <datalist id="liste-projets">${noms.map(n => `<option value="${esc(n)}">`).join("")}</datalist></div>
+          <div><label for="date">Date *</label><input id="date" type="date" name="date" required value="${v("date")}"></div></div>
+        <label for="titre">Titre *</label>
+        <input id="titre" name="titre" required value="${v("titre")}" placeholder="ex. Point d'avancement hebdo">
+        <label for="participants">Participants</label>
+        <input id="participants" name="participants" value="${v("participants")}" placeholder="ex. J. Martin, équipe réseau, prestataire X">
+        <label for="notes">Notes / points abordés</label><textarea id="notes" name="notes">${v("notes")}</textarea>
+        <label for="decisions">Décisions prises</label><textarea id="decisions" name="decisions">${v("decisions")}</textarea>
+        <label for="actions">Actions à suivre <span class="doux">— une par ligne : <code>Texte @responsable !JJ/MM/AAAA</code>, préfixer par <code>[x]</code> si faite</span></label>
+        <textarea id="actions" name="actions" placeholder="Commander les switchs @moi !15/10/2026&#10;Valider le plan d'adressage @jdupont">${v("actions")}</textarea>
+        <label for="prochaine">Date de la prochaine réunion</label>
+        <input id="prochaine" type="date" name="prochaine" value="${v("prochaine")}">
+        <div class="barre"><button>Enregistrer</button><a class="bouton secondaire" href="${idModif ? "#/reunion/" + idModif : "#/"}">Annuler</a></div>
+      </form>`;
+  },
+
+  nouvelle(params) {
+    const valeurs = { date: aujourdhui(), projet: params.get("projet") || "" };
+    const p = reunion(params.get("suite"));
+    if (p) Object.assign(valeurs, {
+      projet: p.projet, titre: p.titre, participants: p.participants,
+      date: p.prochaine || aujourdhui(), notes: `Suite de la réunion du ${frDate(p.date)}.`,
+      actions: formatActions(p.actions.filter(a => !a.faite)) });
+    return vues.formulaire(valeurs);
+  },
+
+  modifier(id) {
+    const r = reunion(id);
+    return r ? vues.formulaire({ ...r, actions: formatActions(r.actions) }, id) : null;
+  },
+
+  actions(params) {
+    const resp = params.get("responsable");
+    const gens = [...new Set(actionsOuvertes().map(a => a.responsable).filter(Boolean))]
+      .sort((a, b) => a.localeCompare(b, "fr", { sensitivity: "base" }));
+    return `<h1>Actions ouvertes${resp ? " — " + esc(resp) : ""}</h1>
+      <p class="doux">Filtrer : <a href="#/actions">Tous</a>${gens.map(g =>
+        ` · <a href="#/actions?responsable=${encodeURIComponent(g)}">${esc(g)}</a>`).join("")}</p>
+      <div class="carte">${listeActions(actionsOuvertes({ responsable: resp }), "Aucune action ouverte.")}</div>
+      <div class="barre"><button class="secondaire" data-ics>📅 Exporter vers Outlook (.ics)</button></div>`;
+  },
+
+  recherche(params) {
+    const q = params.get("q") || "";
+    const res = rechercher(q);
+    return `<h1>Recherche : ${esc(q)}</h1><p class="doux">${res.length} réunion(s) trouvée(s).</p>
+      <div class="carte">${listeReunions(res, "Aucun résultat.")}</div>`;
+  },
+
+  sauvegarde() {
+    const d = donnees.derniereSauvegarde;
+    return `<h1>Sauvegarde</h1>
+      ${bloc("💾 Exporter", `<p>Vos réunions sont enregistrées <strong>uniquement dans ce navigateur</strong>
+        (vider le cache ou changer de poste les fait disparaître). Exportez régulièrement le fichier
+        JSON vers un dossier sauvegardé (partage réseau, OneDrive…).</p>
+        <p class="doux">${d ? "Dernier export : " + frDate(d) : "Aucun export pour l'instant."}
+        — ${donnees.reunions.length} réunion(s) enregistrée(s).</p>
+        <div class="barre"><button data-export-json>Exporter les données (.json)</button>
+        <button class="secondaire" data-md-tout>Tout exporter en Markdown</button>
+        <button class="secondaire" data-ics>📅 Exporter le calendrier (.ics)</button></div>`)}
+      ${bloc("📂 Restaurer", `<p>Importer un fichier exporté précédemment. Les réunions déjà présentes
+        (même identifiant) sont remplacées, les autres sont conservées.</p>
+        <input type="file" id="fichier-import" accept=".json,application/json">`)}
+      ${bloc("📅 Rappels dans Outlook", `<p>Le fichier <code>.ics</code> contient les échéances des actions ouvertes
+        et les réunions de suivi, avec une alerte la veille. Ouvrez-le avec Outlook pour les ajouter à votre agenda
+        (réexportez-le après avoir ajouté de nouvelles actions).</p>`)}`;
+  },
+};
+
+function afficher() {
+  const [chemin, requete = ""] = (location.hash.slice(1) || "/").split("?");
+  const params = new URLSearchParams(requete);
+  const [, vue = "", ...reste] = chemin.split("/");
+  let arg = reste.join("/");
+  try { arg = decodeURIComponent(arg); } catch (err) { /* lien mal formé : laissé tel quel */ }
+  const html = {
+    "": () => vues.accueil(),
+    projet: () => vues.projet(arg),
+    reunion: () => vues.reunion(arg),
+    nouvelle: () => vues.nouvelle(params),
+    modifier: () => vues.modifier(arg),
+    actions: () => vues.actions(params),
+    recherche: () => vues.recherche(params),
+    sauvegarde: () => vues.sauvegarde(),
+  }[vue]?.();
+  document.getElementById("app").innerHTML = html ??
+    `<h1>Page introuvable</h1><p><a href="#/">Retour au tableau de bord</a></p>`;
+  document.getElementById("q").value = vue === "recherche" ? params.get("q") || "" : "";
+  window.scrollTo(0, 0);
+}
+
+/* ------------------------------------------------------------------ Événements */
+document.addEventListener("submit", ev => {
+  ev.preventDefault();
+  const f = ev.target;
+  if (f.id === "form-recherche") {
+    location.hash = "#/recherche?q=" + encodeURIComponent(document.getElementById("q").value.trim());
+    return;
+  }
+  if (f.id !== "form-reunion") return;
+  const v = Object.fromEntries(new FormData(f));
+  const idModif = f.dataset.id;
+  try {
+    const projet = v.projet.split(/\s+/).filter(Boolean).join(" ");
+    if (!projet) throw new Error("Le projet est obligatoire.");
+    if (!v.titre.trim()) throw new Error("Le titre est obligatoire.");
+    const date = parseDate(v.date);
+    if (!date) throw new Error("La date est obligatoire.");
+    // Réutilise le nom exact d'un projet existant (insensible à la casse).
+    const existant = donnees.reunions.find(r => r.projet.toLowerCase() === projet.toLowerCase());
+    const ancienne = idModif ? reunion(idModif) : null;
+    const r = {
+      id: idModif || nouvelId(), projet: existant ? existant.projet : projet, titre: v.titre.trim(), date,
+      participants: v.participants.trim(), notes: v.notes.trim(), decisions: v.decisions.trim(),
+      prochaine: parseDate(v.prochaine), actions: parseActions(v.actions, ancienne ? ancienne.actions : []),
+    };
+    if (ancienne) Object.assign(ancienne, r); else donnees.reunions.push(r);
+    enregistrer();
+    location.hash = "#/reunion/" + r.id;
+  } catch (err) {
+    document.getElementById("app").innerHTML = vues.formulaire(v, idModif, err.message);
+  }
+});
+
+document.addEventListener("click", ev => {
+  const b = ev.target.closest("button");
+  if (!b) return;
+  const d = b.dataset;
+  if (d.basculer) {
+    const [rid, aid] = d.basculer.split("|");
+    const a = reunion(rid)?.actions.find(x => x.id === aid);
+    if (a) { a.faite = !a.faite; enregistrer(); afficher(); }
+  } else if (d.supprimer) {
+    if (confirm("Supprimer définitivement cette réunion ?")) {
+      donnees.reunions = donnees.reunions.filter(r => r.id !== d.supprimer);
+      enregistrer(); location.hash = "#/";
+    }
+  } else if (d.mdReunion) {
+    const r = reunion(d.mdReunion);
+    telecharger(`reunion-${r.date}.md`, reunionMarkdown(r), "text/markdown");
+  } else if (d.mdProjet !== undefined) {
+    const l = trierDesc(donnees.reunions.filter(r => r.projet === d.mdProjet));
+    telecharger(`projet-${d.mdProjet}.md`, `# Projet ${d.mdProjet}\n\n` + l.map(reunionMarkdown).join("\n"), "text/markdown");
+  } else if (d.mdTout !== undefined) {
+    const parts = projets().map(p => `# Projet ${p.nom}\n\n` +
+      trierDesc(donnees.reunions.filter(r => r.projet === p.nom)).map(reunionMarkdown).join("\n"));
+    telecharger(`memo-reunions-${aujourdhui()}.md`, parts.join("\n"), "text/markdown");
+  } else if (d.ics !== undefined) {
+    telecharger("memo-reunions.ics", calendrierIcs(), "text/calendar");
+  } else if (d.exportJson !== undefined) {
+    donnees.derniereSauvegarde = aujourdhui();
+    enregistrer();
+    telecharger(`memo-reunions-${aujourdhui()}.json`, JSON.stringify(donnees, null, 2), "application/json");
+    afficher();
+  }
+});
+
+document.addEventListener("change", async ev => {
+  if (ev.target.id !== "fichier-import" || !ev.target.files[0]) return;
+  try {
+    const importe = JSON.parse(await ev.target.files[0].text());
+    if (!Array.isArray(importe.reunions)) throw new Error("fichier non reconnu");
+    const valides = importe.reunions.filter(r => r && r.id && r.projet && r.titre && r.date && Array.isArray(r.actions));
+    const ids = new Set(valides.map(r => r.id));
+    donnees.reunions = donnees.reunions.filter(r => !ids.has(r.id)).concat(valides);
+    enregistrer();
+    alert(`${valides.length} réunion(s) importée(s).`);
+    location.hash = "#/";
+  } catch (err) {
+    alert("Import impossible : " + err.message);
+  }
+});
+
+window.addEventListener("hashchange", afficher);
+window.addEventListener("storage", ev => { if (ev.key === CLE) { charger(); afficher(); } });
+charger();
+afficher();
+</script>
+</body>
+</html>
