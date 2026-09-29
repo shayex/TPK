@@ -1,0 +1,18 @@
+[Unit]
+Description=Mémo Réunions (suivi des réunions par projet)
+After=network-online.target
+
+[Service]
+EnvironmentFile=/etc/memo-reunions.env
+WorkingDirectory=/opt/memo-reunions
+ExecStart=/usr/bin/python3 /opt/memo-reunions/app.py
+DynamicUser=yes
+User=memo-reunions
+StateDirectory=memo-reunions
+Restart=on-failure
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

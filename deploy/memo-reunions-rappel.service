@@ -1,0 +1,11 @@
+[Unit]
+Description=Mémo Réunions — envoi du récapitulatif e-mail
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/memo-reunions.env
+WorkingDirectory=/opt/memo-reunions
+ExecStart=/usr/bin/python3 /opt/memo-reunions/rappel.py
+DynamicUser=yes
+User=memo-reunions
+StateDirectory=memo-reunions
